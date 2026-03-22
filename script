@@ -1,0 +1,184 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import csv
+
+# -----------------------------
+# Configuración
+# -----------------------------
+csv_path = r"C:\Users\LENOVO\Downloads\archive\spotify_dataset.csv"
+chunk_size = 100_000  # tamaño de chunk
+
+# -----------------------------
+# Cargar CSV con chunks
+# -----------------------------
+chunks = []
+for chunk in pd.read_csv(
+        csv_path,
+        sep=",",
+        engine="python",         # motor tolerante
+        chunksize=chunk_size,
+        on_bad_lines='skip',     # ignora filas problemáticas
+        quoting=csv.QUOTE_NONE,  # ignora comillas desbalanceadas
+        encoding='utf-8'
+    ):
+    # Limpiar nombres de columnas
+    chunk.columns = [col.strip().replace('"', '') for col in chunk.columns]
+    chunks.append(chunk)
+
+df = pd.concat(chunks, ignore_index=True)
+print(f"CSV cargado con éxito. Filas totales: {len(df)}")
+
+
+# -----------------------------
+# Exploración básica
+# -----------------------------
+print("\nPrimeras filas:")
+print(df.head())
+
+print("\nColumnas:")
+print(df.columns.tolist())
+
+print(f"\nNúmero de playlists únicas: {df['playlistname'].nunique()}")
+print(f"Número de tracks únicos: {df['trackname'].nunique()}")
+print(f"Número de artistas únicos: {df['artistname'].nunique()}")
+
+# -----------------------------
+# Funciones auxiliares
+# -----------------------------
+def top_n_series(series: pd.Series, n=20):
+    """Imprime top N de una serie"""
+    return series.sort_values(ascending=False).head(n)
+
+# -----------------------------
+# Análisis de tracks
+# -----------------------------
+# Tracks más populares por número de playlists
+track_popularity = df.groupby(['trackname', 'artistname'])['playlistname'].nunique()
+print("\nTop 20 tracks por número de playlists distintas:")
+print(top_n_series(track_popularity))
+
+# Total de veces que aparece cada track + artista en la DB
+track_total_counts = df.groupby(['trackname', 'artistname']).size()
+print("\nTop 20 tracks por total de apariciones en toda la DB:")
+print(top_n_series(track_total_counts))
+
+# -----------------------------
+# Análisis de playlists
+# -----------------------------
+playlist_counts = df['playlistname'].value_counts()
+print("\nTop 20 playlists con más tracks:")
+print(top_n_series(playlist_counts))
+
+# Visualización rápida
+data_top = top_n_series(playlist_counts).reset_index()
+data_top.columns = ["playlist", "count"]
+
+plt.figure(figsize=(8,6))
+sns.barplot(
+    data=data_top,
+    x="count",
+    y="playlist",
+    hue="playlist",
+    palette="viridis",
+    legend=False
+)
+
+plt.xlabel("Número de tracks")
+plt.ylabel("Playlist")
+plt.title("Top 20 Playlists")
+plt.tight_layout()
+plt.show()
+
+# -----------------------------
+# Análisis de artistas
+# -----------------------------
+artist_popularity = df.groupby('artistname')['playlistname'].nunique()
+print("\nTop 20 artistas más presentes en playlists:")
+print(top_n_series(artist_popularity))
+
+# -----------------------------
+# LIMPIEZA (IMPORTANTE)
+# -----------------------------
+df['trackname'] = df['trackname'].str.strip().str.replace('"', '')
+df['artistname'] = df['artistname'].str.strip().str.replace('"', '')
+
+# -----------------------------
+# Recalcular stats (ya limpios)
+# -----------------------------
+track_total_counts = df.groupby(['trackname', 'artistname']).size()
+track_playlist_counts = df.groupby(['trackname', 'artistname'])['playlistname'].nunique()
+
+# -----------------------------
+# BPM DATA
+# -----------------------------
+bpm_data = {
+    "trackname": [
+        "Midnight City","Get Lucky","Radioactive","Wake Me Up","Little Talks",
+        "Royals","Ho Hey","Can't Hold Us","Pompeii","Blurred Lines",
+        "Pumped up Kicks","We Are Young","Smells Like Teen Spirit",
+        "Somebody That I Used To Know","Do I Wanna Know?","Let Her Go",
+        "Rather Be","Sweet Disposition","Counting Stars","Thrift Shop"
+    ],
+    "artistname": [
+        "M83","Daft Punk","Imagine Dragons","Avicii","Of Monsters and Men",
+        "Lorde","The Lumineers","Macklemore & Ryan Lewis","Bastille","Robin Thicke",
+        "Foster The People","Fun.","Nirvana","Gotye","Arctic Monkeys","Passenger",
+        "Clean Bandit","The Temper Trap","OneRepublic","Macklemore & Ryan Lewis"
+    ],
+    "BPM": [
+        105,116,136,124,103,85,80,146,127,123,128,92,117,129,85,75,121,129,122,95
+    ]
+}
+
+bpm_df = pd.DataFrame(bpm_data)
+
+# Limpieza BPM también
+bpm_df['trackname'] = bpm_df['trackname'].str.strip()
+bpm_df['artistname'] = bpm_df['artistname'].str.strip()
+
+import re
+
+def clean_track(name):
+    name = name.lower()
+    name = re.sub(r"\(.*?\)", "", name)  # quita paréntesis
+    name = re.sub(r"-.*", "", name)      # quita " - feat..."
+    name = name.strip()
+    return name
+
+# Aplicar limpieza
+df['trackname_clean'] = df['trackname'].apply(clean_track)
+bpm_df['trackname_clean'] = bpm_df['trackname'].apply(clean_track)
+
+df['artistname_clean'] = df['artistname'].str.lower().str.strip()
+bpm_df['artistname_clean'] = bpm_df['artistname'].str.lower().str.strip()
+
+# -----------------------------
+# MERGE
+# -----------------------------
+combined_df = pd.merge(
+    bpm_df,
+    track_total_counts.reset_index().rename(columns={0:"total_appearances"}),
+    on=["trackname","artistname"],
+    how="inner"
+)
+
+combined_df = pd.merge(
+    combined_df,
+    track_playlist_counts.reset_index().rename(columns={"playlistname":"playlist_count"}),
+    on=["trackname","artistname"],
+    how="inner"
+)
+
+# -----------------------------
+# LISTA FINAL ORDENADA
+# -----------------------------
+final_table = combined_df.sort_values(
+    by="total_appearances",
+    ascending=False
+)[["trackname","artistname","total_appearances","BPM"]]
+
+print("\nTop Tracks (DB + BPM):\n")
+print(final_table.to_string(index=False))
+
+final_table.to_csv("top_tracks_with_bpm.csv", index=False)
